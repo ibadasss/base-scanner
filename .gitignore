@@ -11,3 +11,5 @@ venv/
 # Generated screener output
 base_utility_ranking.csv
 *.csv
+smart_money_candidates.txt
+monitor_state.json
