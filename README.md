@@ -63,7 +63,25 @@ SMART_MONEY_WALLETS = [
 ]
 ```
 
-If the list is empty, the smart-money pillar is automatically **disabled** and the composite uses the remaining pillars. How to find good wallets: trace early buyers of past Base winners, follow funds/known allocators, and keep the ones with a repeatable track record.
+If the list is empty, the smart-money pillar is automatically **disabled** and the composite uses the remaining pillars.
+
+### Don't have a seed list? Discover one — `--discover`
+
+The discovery tool builds a candidate seed list **keylessly** from on-chain data. Because a swap's `tx_from` on Base is usually a router/aggregator/ERC-4337 bundler (not the user), it ignores swaps and looks at the ground truth — **ERC-20 Transfer events**:
+
+```
+1. Find "winner" tokens (trending + top pools: liquid, rising, not a rug-pump)
+2. Measure NET ACCUMULATION per address via eth_getLogs over a recent window
+3. Drop CEX/MM/bots (by nonce) and routers/pools (by bytecode + net flow)
+4. Keep wallets that STILL HOLD what they accumulated (real conviction)
+5. Rank wallets that accumulated MULTIPLE winners (skill, not luck)
+```
+
+```bash
+python3 screener.py --discover     # prints candidates + writes smart_money_candidates.txt
+```
+
+Review the candidates (the file includes a DeBank-ready list), paste the good ones into `SMART_MONEY_WALLETS`, and re-run the screener. It's a rolling snapshot — run it periodically to grow your list.
 
 ---
 
@@ -103,6 +121,9 @@ python3 screener.py --show-rejected
 
 # Token-level safety check on a single address (honeypot + Sourcify verification)
 python3 screener.py --check 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+
+# Discover candidate smart-money wallets from on-chain accumulation
+python3 screener.py --discover
 ```
 
 ### Example output
@@ -131,8 +152,9 @@ utility-screener/
 ├── fetch.py         # DefiLlama (TVL/fees) + GeckoTerminal (new pools) fetchers
 ├── safety.py        # data-quality filter + honeypot.is + Sourcify verification
 ├── score.py         # utility rubric + composite scoring (pillar blend)
-├── smartmoney.py    # keyless on-chain smart-money tracker (Base RPC balanceOf)
+├── smartmoney.py    # keyless on-chain smart-money tracker + RPC helpers (multi-endpoint)
 ├── social.py        # Farcaster buzz via keyless Warpcast search
+├── discover.py      # keyless smart-money discovery (accumulation via eth_getLogs)
 ├── screener.py      # main pipeline + CLI
 ├── requirements.txt
 ├── .env.example
@@ -162,10 +184,10 @@ Phase 1 (Safety + Utility) and Phase 2 (Smart Money + Social + composite tuning)
 - [x] **Layer 2 — Utility:** revenue/usage/stickiness fundamental score
 - [x] **Layer 3 — Smart Money:** curated-wallet on-chain holdings signal
 - [x] **Layer 4 — Social:** Farcaster buzz momentum
+- [x] **Smart-money discovery:** keyless wallet discovery via on-chain accumulation (`--discover`)
 - [ ] **Backtesting:** validate the rubric would have caught known winners early
 - [ ] **Alerts:** push top movers to Telegram/Discord
 - [ ] **New-pool scanning:** auto early-detection loop over `fetch.fetch_new_pools()` + `safety.assess_token()`
-- [ ] **Smart-money discovery:** auto-suggest seed wallets from early buyers of past winners
 
 ---
 
@@ -175,5 +197,5 @@ Phase 1 (Safety + Utility) and Phase 2 (Smart Money + Social + composite tuning)
 - [GeckoTerminal](https://www.geckoterminal.com/dex-api) — DEX pools, prices, volume (free, keyless)
 - [honeypot.is](https://honeypot.is/) — honeypot / tax detection (free, keyless)
 - [Sourcify](https://sourcify.dev/) — contract verification (free, keyless)
-- [Base public RPC](https://docs.base.org/) — on-chain balances for smart-money checks (keyless)
+- [Base public RPC](https://docs.base.org/) — on-chain balances, nonces, code & Transfer logs (keyless; rotates across mainnet.base.org, publicnode, drpc, meowrpc for resilience)
 - [Warpcast / Farcaster](https://warpcast.com/) — social buzz (free, keyless); [Neynar](https://neynar.com/) optional

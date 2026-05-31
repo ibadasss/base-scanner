@@ -32,6 +32,7 @@ import safety
 import score
 import smartmoney
 import social
+import discover
 
 
 def _merge_fees(
@@ -215,12 +216,16 @@ def main() -> None:
                         help="how many top candidates to enrich")
     parser.add_argument("--check", metavar="ADDRESS",
                         help="run token-level safety check on a single address")
+    parser.add_argument("--discover", action="store_true",
+                        help="discover candidate smart-money wallets from on-chain activity")
     parser.add_argument("--show-rejected", action="store_true",
                         help="list protocols dropped by the safety filter and why")
     args = parser.parse_args()
 
     if args.check:
         run_token_check(args.check)
+    elif args.discover:
+        discover.run_discovery()
     else:
         run_screener(
             args.top, args.csv,

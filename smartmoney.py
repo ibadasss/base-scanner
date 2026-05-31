@@ -15,6 +15,7 @@ none. Curate the list in config.py over time.
 from __future__ import annotations
 
 import re
+import time
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -56,6 +57,61 @@ def resolve_base_token(address_field: Any) -> Optional[str]:
 # --------------------------------------------------------------------------
 # Minimal JSON-RPC client (batched)
 # --------------------------------------------------------------------------
+def _coerce_id(raw: Any) -> Optional[int]:
+    """Coerce a JSON-RPC response id to int. Some Base RPC backends return it
+    as a string (e.g. "3"), which previously caused results to be dropped."""
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _post_batch(payload: List[Dict[str, Any]]) -> Dict[int, Any]:
+    """
+    POST a JSON-RPC batch with retries, backoff, and ENDPOINT ROTATION,
+    returning {int_id: result}.
+
+    Robust against any single public RPC rate-limiting under load: it rotates
+    through config.BASE_RPC_URLS. Returns the best-effort map; callers MUST
+    treat a missing id as 'unknown' (and exclude conservatively) rather than as
+    a 0/false value -- that silent-default behaviour previously let bots slip
+    through filters.
+    """
+    endpoints = getattr(config, "BASE_RPC_URLS", [config.BASE_RPC_URL])
+    best: Dict[int, Any] = {}
+    attempt = 0
+    for url in endpoints:
+        for _ in range(2):  # two tries per endpoint before rotating
+            attempt += 1
+            try:
+                resp = requests.post(
+                    url, json=payload,
+                    headers={"User-Agent": config.USER_AGENT,
+                             "Content-Type": "application/json"},
+                    timeout=config.REQUEST_TIMEOUT,
+                )
+                if resp.status_code == 429:
+                    time.sleep(2 * attempt)
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                if isinstance(data, list):
+                    got: Dict[int, Any] = {}
+                    for item in data:
+                        cid = _coerce_id(item.get("id"))
+                        if cid is not None and "result" in item:
+                            got[cid] = item["result"]
+                    if len(got) > len(best):
+                        best = got
+                    if len(got) == len(payload):
+                        return got  # complete
+                time.sleep(1.0)
+            except Exception:  # noqa: BLE001 - rotate to next endpoint
+                time.sleep(1.0)
+                break
+    return best
+
+
 def _rpc_batch(calls: List[Dict[str, str]]) -> List[Optional[str]]:
     """
     Execute a batch of eth_call requests. `calls` is a list of {to, data}.
@@ -67,27 +123,8 @@ def _rpc_batch(calls: List[Dict[str, str]]) -> List[Optional[str]]:
         {"jsonrpc": "2.0", "id": i, "method": "eth_call", "params": [c, "latest"]}
         for i, c in enumerate(calls)
     ]
-    try:
-        resp = requests.post(
-            config.BASE_RPC_URL,
-            json=payload,
-            headers={"User-Agent": config.USER_AGENT, "Content-Type": "application/json"},
-            timeout=config.REQUEST_TIMEOUT,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as exc:  # noqa: BLE001 - fail soft
-        print(f"  [warn] RPC batch failed: {exc}")
-        return [None] * len(calls)
-
-    if not isinstance(data, list):
-        return [None] * len(calls)
-    out: List[Optional[str]] = [None] * len(calls)
-    for item in data:
-        idx = item.get("id")
-        if isinstance(idx, int) and 0 <= idx < len(calls):
-            out[idx] = item.get("result")
-    return out
+    got = _post_batch(payload)
+    return [got.get(i) for i in range(len(calls))]
 
 
 def _balance_call(token: str, wallet: str) -> Dict[str, str]:
@@ -108,6 +145,31 @@ def _get_decimals(token: str) -> int:
     res = _rpc_batch([{"to": token, "data": _SEL_DECIMALS}])
     d = _hex_to_int(res[0]) if res else 0
     return d if 0 < d <= 36 else 18  # sane default
+
+
+def _code_is_wallet(code: Optional[str]) -> bool:
+    """
+    True if an address is a usable wallet (EOA), not a contract.
+
+    - "0x"          -> plain EOA
+    - "0xef0100..." -> EIP-7702 delegated EOA (still a user wallet)
+    - anything else -> real contract bytecode (router/aggregator/MM) -> exclude
+    """
+    if code is None:
+        return False
+    c = code.lower()
+    if c in ("0x", "0x0", ""):
+        return True
+    return c.startswith("0xef0100")
+
+
+def classify_wallets(addresses: List[str]) -> Dict[str, bool]:
+    """
+    Returns {address: is_wallet} for addresses whose code could be resolved.
+    Addresses that could not be resolved are OMITTED (callers should treat a
+    missing entry as 'unknown' and decide conservatively).
+    """
+    return {a: _code_is_wallet(code) for a, code in get_codes(addresses).items()}
 
 
 # --------------------------------------------------------------------------
@@ -169,3 +231,63 @@ def enrich_smart_money(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     print(f"  [ok] smart-money: checked {resolved} token(s) against "
           f"{len(wallets)} seed wallet(s)")
     return candidates
+
+
+
+def batch_token_balances(pairs: List[tuple], chunk: int = 60) -> List[int]:
+    """
+    Resolve raw balances for many (token, wallet) pairs via batched eth_call.
+    Returns a list of ints aligned to `pairs`. Used to verify that discovered
+    buyers still HOLD the tokens they bought (conviction check).
+    """
+    out: List[int] = []
+    for start in range(0, len(pairs), chunk):
+        sub = pairs[start:start + chunk]
+        calls = [_balance_call(token, wallet) for token, wallet in sub]
+        results = _rpc_batch(calls)
+        out.extend(_hex_to_int(r) for r in results)
+    return out
+
+
+
+def get_nonces(addresses: List[str], batch_size: int = 50) -> Dict[str, int]:
+    """
+    Batch eth_getTransactionCount -> {address: nonce} for RESOLVED addresses
+    only. A very high nonce flags CEX hot wallets / market makers / bots.
+    Unresolved addresses are omitted (treat as unknown, exclude conservatively).
+    """
+    out: Dict[str, int] = {}
+    uniq = list(dict.fromkeys(a for a in addresses if _ADDR_RE.match(a or "")))
+    for start in range(0, len(uniq), batch_size):
+        chunk = uniq[start:start + batch_size]
+        payload = [
+            {"jsonrpc": "2.0", "id": i, "method": "eth_getTransactionCount",
+             "params": [addr, "latest"]}
+            for i, addr in enumerate(chunk)
+        ]
+        got = _post_batch(payload)
+        for i, addr in enumerate(chunk):
+            if i in got:
+                out[addr] = _hex_to_int(got[i])
+    return out
+
+
+
+def get_codes(addresses: List[str], batch_size: int = 50) -> Dict[str, str]:
+    """
+    Batch eth_getCode -> {address: code_hex} for RESOLVED addresses only.
+    Lets callers measure bytecode size (large bytecode = router/aggregator).
+    """
+    out: Dict[str, str] = {}
+    uniq = list(dict.fromkeys(a for a in addresses if _ADDR_RE.match(a or "")))
+    for start in range(0, len(uniq), batch_size):
+        chunk = uniq[start:start + batch_size]
+        payload = [
+            {"jsonrpc": "2.0", "id": i, "method": "eth_getCode", "params": [addr, "latest"]}
+            for i, addr in enumerate(chunk)
+        ]
+        got = _post_batch(payload)
+        for i, addr in enumerate(chunk):
+            if i in got:
+                out[addr] = got[i] or "0x"
+    return out
