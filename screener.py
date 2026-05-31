@@ -33,6 +33,8 @@ import score
 import smartmoney
 import social
 import discover
+import monitor
+import alerts
 
 
 def _merge_fees(
@@ -218,6 +220,12 @@ def main() -> None:
                         help="run token-level safety check on a single address")
     parser.add_argument("--discover", action="store_true",
                         help="discover candidate smart-money wallets from on-chain activity")
+    parser.add_argument("--monitor", action="store_true",
+                        help="scan smart-money wallets for fresh consensus buys + alert")
+    parser.add_argument("--no-telegram", action="store_true",
+                        help="with --monitor: print alerts to console only (don't send Telegram)")
+    parser.add_argument("--test-telegram", action="store_true",
+                        help="send a test message to verify Telegram setup")
     parser.add_argument("--show-rejected", action="store_true",
                         help="list protocols dropped by the safety filter and why")
     args = parser.parse_args()
@@ -226,6 +234,11 @@ def main() -> None:
         run_token_check(args.check)
     elif args.discover:
         discover.run_discovery()
+    elif args.monitor:
+        monitor.run_monitor(send=not args.no_telegram)
+    elif args.test_telegram:
+        ok, detail = alerts.test_telegram()
+        print(f"Telegram test: {'OK - check your chat' if ok else 'FAILED - ' + detail}")
     else:
         run_screener(
             args.top, args.csv,

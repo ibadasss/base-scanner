@@ -124,7 +124,34 @@ python3 screener.py --check 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
 
 # Discover candidate smart-money wallets from on-chain accumulation
 python3 screener.py --discover
+
+# Monitor smart-money wallets for fresh CONSENSUS buys (+ Telegram alerts)
+python3 screener.py --monitor              # sends Telegram if configured
+python3 screener.py --monitor --no-telegram  # console only
+python3 screener.py --test-telegram        # verify Telegram setup
 ```
+
+## Smart Money Monitor + alerts
+
+Once you have a seed list (curated or from `--discover`), the monitor turns it into an early-detection radar. Each run it scans recent on-chain Transfers **into** your smart-money wallets, and when **several of them freshly accumulate the same token** (consensus), it validates the token (real liquidity + not a honeypot) and alerts you.
+
+```bash
+python3 screener.py --monitor
+```
+
+Run it on a schedule (e.g. cron every 15-30 min); a per-token cooldown prevents repeat spam, and state persists between runs.
+
+### Telegram setup (free, ~2 min)
+
+1. In Telegram, message **@BotFather** → `/newbot` → copy the **bot token**.
+2. Send your new bot any message (so it's allowed to DM you).
+3. Get your **chat id** from **@userinfobot**, or open `https://api.telegram.org/bot<TOKEN>/getUpdates` and read `message.chat.id`.
+4. Put both in `.env`:
+   ```
+   TELEGRAM_BOT_TOKEN=123456:ABC...
+   TELEGRAM_CHAT_ID=123456789
+   ```
+5. Verify: `python3 screener.py --test-telegram`
 
 ### Example output
 
@@ -155,6 +182,8 @@ utility-screener/
 ├── smartmoney.py    # keyless on-chain smart-money tracker + RPC helpers (multi-endpoint)
 ├── social.py        # Farcaster buzz via keyless Warpcast search
 ├── discover.py      # keyless smart-money discovery (accumulation via eth_getLogs)
+├── monitor.py       # smart-money consensus monitor + alerts
+├── alerts.py        # Telegram alert delivery
 ├── screener.py      # main pipeline + CLI
 ├── requirements.txt
 ├── .env.example
@@ -185,8 +214,8 @@ Phase 1 (Safety + Utility) and Phase 2 (Smart Money + Social + composite tuning)
 - [x] **Layer 3 — Smart Money:** curated-wallet on-chain holdings signal
 - [x] **Layer 4 — Social:** Farcaster buzz momentum
 - [x] **Smart-money discovery:** keyless wallet discovery via on-chain accumulation (`--discover`)
+- [x] **Smart-money monitor + alerts:** consensus detection + Telegram (`--monitor`)
 - [ ] **Backtesting:** validate the rubric would have caught known winners early
-- [ ] **Alerts:** push top movers to Telegram/Discord
 - [ ] **New-pool scanning:** auto early-detection loop over `fetch.fetch_new_pools()` + `safety.assess_token()`
 
 ---

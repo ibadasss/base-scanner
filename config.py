@@ -57,6 +57,11 @@ USER_AGENT = "base-utility-screener/0.2 (research bot)"
 ETHERSCAN_API_KEY = os.getenv("ETHERSCAN_API_KEY", "").strip()
 # Neynar key: optional, gives richer Farcaster data. Falls back to Warpcast.
 NEYNAR_API_KEY = os.getenv("NEYNAR_API_KEY", "").strip()
+# Telegram alerts: set both to receive Smart Money Monitor notifications.
+#   TELEGRAM_BOT_TOKEN -> from @BotFather
+#   TELEGRAM_CHAT_ID   -> your user/group/channel id (see README)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
 # --- Endpoints -------------------------------------------------------------
 DEFILLAMA_PROTOCOLS = "https://api.llama.fi/protocols"
@@ -67,6 +72,7 @@ ETHERSCAN_V2 = "https://api.etherscan.io/v2/api"
 SOURCIFY_V2 = "https://sourcify.dev/server/v2/contract/{chain_id}/{address}"
 WARPCAST_SEARCH = "https://api.warpcast.com/v2/search-casts"
 NEYNAR_SEARCH = "https://api.neynar.com/v2/farcaster/cast/search"
+TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
 
 # --- Screening thresholds (Safety + data quality) --------------------------
 # Protocols below this Base TVL are too small / illiquid to trust for an MVP.
@@ -174,3 +180,36 @@ DEFAULT_CSV_PATH = "base_utility_ranking.csv"
 
 # Backwards-compat alias (older code referenced WEIGHTS).
 WEIGHTS = UTILITY_WEIGHTS
+
+
+
+# --- Smart Money Monitor + Consensus Alert ---------------------------------
+# `python screener.py --monitor` scans recent on-chain Transfers INTO your
+# SMART_MONEY_WALLETS, detects tokens freshly accumulated by several of them
+# (consensus), filters spam/scams, and alerts (console + optional Telegram).
+GECKOTERMINAL_TOKEN = "https://api.geckoterminal.com/api/v2/networks/{chain}/tokens/{address}"
+
+# Common base/quote tokens to ignore -- receiving these is not a "buy signal".
+MONITOR_EXCLUDE_TOKENS = {
+    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",  # USDC
+    "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca",  # USDbC
+    "0x4200000000000000000000000000000000000006",  # WETH
+    "0x50c5725949a6f0c72e6c4a641f24049a917db0cb",  # DAI
+    "0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22",  # cbETH
+    "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2",  # USDT
+    "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf",  # cbBTC
+    "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42",  # EURC
+    "0xc1cba3fcea344f92d9239c08c0568f6f2f0ee452",  # wstETH
+}
+
+MONITOR = {
+    "lookback_blocks": 1800,       # how far back to scan per run (~1h on Base)
+    "chunk_blocks": 900,           # getLogs sub-range size
+    "min_consensus": 2,            # >= this many smart wallets buying same token -> alert
+    "alert_cooldown_sec": 43_200,  # don't re-alert the same token within 12h
+    "min_token_liquidity_usd": 50_000,  # token must have real liquidity (filters spam airdrops)
+    "min_token_volume_24h_usd": 20_000,
+    "check_honeypot": True,        # drop honeypots before alerting
+    "max_validate": 30,            # cap consensus tokens validated per run (API budget)
+    "state_file": "monitor_state.json",
+}
